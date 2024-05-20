@@ -21,11 +21,11 @@
 #define NEXT_BUTTON   15
 #define PREV_BUTTON   16
 
-//pines pantalla
-//GND GND
-//VCC A 3,3V
-//SDA GPIO21 PIN 47
-//
+// Declarar objeto de pantalla
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+#define OLED_RESET    -1 // Reset pin # (or -1 if sharing Arduino reset pin)
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // Declaración de objetos de audio y variables globales
 AudioFileSourceSD *audioFile;
@@ -39,8 +39,6 @@ uint32_t lastPosition = 0; // Variable para almacenar la última posición de re
 // Declaración de funciones
 void playMP3(const char *filename);
 void listFiles();
-uint32_t getMs();
-void seekMs(uint32_t position);
 
 void setup() {
   Serial.begin(115200);
@@ -49,6 +47,12 @@ void setup() {
   if (!SD.begin(SD_CS)) {
     Serial.println("Error al inicializar la tarjeta SD.");
     return;
+  }
+
+  // Inicializar la pantalla OLED
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;);
   }
 
   // Configurar pines para audio
@@ -92,7 +96,6 @@ void loop() {
       dir = SD.open("/playlist"); // Abrir la carpeta "playlist"
       if (!dir) {
         Serial.println("Error al abrir la carpeta de la playlist.");
-        return;
       }
       entry = dir.openNextFile(); // Abrir el siguiente archivo en la lista
       if (!entry) {
@@ -146,10 +149,17 @@ void playMP3(const char *filename) {
   audioFile = new AudioFileSourceSD(filename);
   mp3 = new AudioGeneratorMP3();
   mp3->begin(audioFile, audioOutput);
-  mp3->seekMs(lastPosition); // Ir a la posición de reproducción anterior
   isPlaying = true; // Marcar como reproducción en curso
 
-  // Actualizar la pantalla con el nombre del archivo MP3
+  // Obtener el nombre del artista del nombre del archivo MP3
+  String artistName = ""; // Variable para almacenar el nombre del artista
+  int artistIndex = String(filename).lastIndexOf('_'); // Buscar el índice del último guión bajo
+  if (artistIndex != -1) {
+    artistName = String(filename).substring(artistIndex + 1); // Extraer el nombre del artista del nombre del archivo
+    artistName.replace(".mp3", ""); // Eliminar la extensión ".mp3" del nombre del artista
+  }
+  
+  // Actualizar la pantalla con el nombre del archivo MP3 y el nombre del artista
   display.clearDisplay();
   display.setTextSize(1);      
   display.setTextColor(SSD1306_WHITE); 
@@ -158,18 +168,23 @@ void playMP3(const char *filename) {
   display.setTextSize(2);      
   display.setCursor(0,10);
   display.println(filename);
+  display.setCursor(0,30); // Ajustar la posición del cursor para mostrar el nombre del artista
+  display.println(artistName);
   display.display();
 
   // Reproducir el archivo MP3
   while (mp3->isRunning()) {
     if (!isPlaying) {
-      lastPosition = getMs(); // Guardar la posición actual de reproducción antes de detener la reproducción
       break;
     }
     if (mp3->loop()) {
       break; // Salir del bucle si la reproducción termina
     }
   }
+
+  // Finalizar la reproducción y liberar recursos
+  delete mp3;
+  delete audioFile;
 }
 
 // Función para listar los archivos disponibles en la carpeta de la lista de reproducción
@@ -200,26 +215,5 @@ void listFiles() {
       entry.close(); // Cerrar el archivo
     }
     dir.close(); // Cerrar la carpeta
-  }
-}
-
-// Función para obtener el tiempo de reproducción actual en milisegundos
-uint32_t getMs() {
-  if (mp3 && mp3->isRunning()) {
-    int bitrate = 128; // Tasa de bits del archivo MP3 en kbps (ejemplo)
-    int samplesPlayed = mp3->nsCount; // Número de muestras reproducidas
-    int sampleRate = mp3->lastRate; // Tasa de muestreo del archivo MP3
-    return (samplesPlayed * 1000) / (bitrate * 1024 / 8); // Calcular el tiempo en milisegundos
-  }
-  return 0; // Retornar 0 si no hay archivo MP3 en reproducción o no se puede calcular el tiempo
-}
-
-// Función para buscar una posición específica en el archivo MP3 en milisegundos
-void seekMs(uint32_t position) {
-  if (mp3 && mp3->isRunning()) {
-    // Convertir milisegundos a muestras de audio
-    uint32_t samples = (position * mp3->lastRate) / 1000;
-    // Establecer el contador de muestras en la posición deseada
-    mp3->nsCount = samples;
   }
 }

@@ -44,6 +44,7 @@ class AudioGeneratorMP3 : public AudioGenerator
     static constexpr int preAllocFrameSize () { return (sizeof(struct mad_frame) + 7) & ~7; }
     static constexpr int preAllocSynthSize () { return (sizeof(struct mad_synth) + 7) & ~7; }
 
+
   protected:   
     void *preallocateSpace = nullptr;
     int preallocateSize = 0;
