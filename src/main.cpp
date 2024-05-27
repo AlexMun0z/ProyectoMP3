@@ -11,10 +11,10 @@
 #include <driver/i2s.h>
 
 // Definir pines digitales utilizados
-#define SD_CS         10 //pin fisico  9
+#define SD_CS         10 //pin fisico 9
 #define SPI_MOSI      11 //pin fisico 10
-#define SPI_MISO      13 //pin fisico 11
-#define SPI_SCK       12 //pin fisico 12
+#define SPI_MISO      13 //pin fisico 12
+#define SPI_SCK       12 //pin fisico 11
 #define I2S_DOUT      36 //pin fisico 37
 #define I2S_BCLK      37 //pin fisico 38
 #define I2S_LRC       38 //pin fisico 39
@@ -49,7 +49,7 @@ void playMP3(const char *filename);
 void listFiles();
 void playNext();
 void playPrevious();
-void displaySongInfo(const char *filename);
+void displaySongInfo(const char *filename,bool isPlaying);
 
 void setup() {
   Serial.begin(115200);
@@ -70,7 +70,8 @@ void setup() {
 
   // Configurar pines para audio
   audioOutput = new AudioOutputI2S();
-   
+  audioOutput-> SetGain(0.125);
+   //Configurar pines I2S
   i2s_pin_config_t i2sPins = {
     .mck_io_num = I2S_PIN_NO_CHANGE,
     .bck_io_num = I2S_BCLK,
