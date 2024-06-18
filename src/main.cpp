@@ -7,162 +7,156 @@
 #include <AudioFileSourceSD.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>  
+#include <Adafruit_SSD1306.h>
 #include <driver/i2s.h>
 
 // Definir pines digitales utilizados
-#define SD_CS         10 //pin fisico 9
-#define SPI_MOSI      11 //pin fisico 10
-#define SPI_MISO      13 //pin fisico 12
-#define SPI_SCK       12 //pin fisico 11
-#define I2S_DOUT      36 //pin fisico 37
-#define I2S_BCLK      37 //pin fisico 38
-#define I2S_LRC       38 //pin fisico 39
-#define I2C_SDA       8  //pin fisico 18
-#define I2C_SCL       9  //pin fisico 46
-#define PLAY_BUTTON   5  //pin físico 4
-#define NEXT_BUTTON   6  //pin físico 5
-#define PREV_BUTTON   7  //pin físico 6
+#define SD_CS         15
+#define SPI_MOSI      12
+#define SPI_MISO      13
+#define SPI_SCK       14
+#define I2S_DOUT      25
+#define I2S_BCLK      27
+#define I2S_LRC       26
+#define I2C_SDA       21
+#define I2C_SCL       22
+#define BUTTON_PLAY   4
+#define BUTTON_PREV   0
+#define BUTTON_NEXT   2
 
 // Declarar objeto de pantalla
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
-#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+#define SCREEN_HEIGHT 32 // OLED display height, in pixels
 #define OLED_RESET    -1 // Reset pin # (or -1 if sharing Arduino reset pin)
-#define SCREEN_ADDRESS 0x3D
+#define SCREEN_ADDRESS 0x3C
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // Declaración de objetos de audio y variables globales
 AudioFileSourceSD *audioFile;
 AudioGeneratorMP3 *mp3;
 AudioOutputI2S *audioOutput;
-String playlist[20]; // Array para almacenar nombres de archivos MP3
-File dir; // Variable global para la carpeta de la playlist
-File entry; // Variable para la canción que se va a reproducir
+const int Nfiles=15;  //Variable para número de archivos permitidos
+String playlist[Nfiles]; // Array para almacenar nombres de archivos MP3
 int fileCount = 0; // Contador de archivos en la playlist
-int currentIndex = -1; // Índice del archivo actual
+int currentIndex = 0; // Índice del archivo actualmente seleccionado
 bool isPlaying = false; // Variable para verificar si se está reproduciendo una canción o no
+#define DEBOUNCE_DELAY 200 //Debounce botones
 
+// Estados de los botones
+bool prevButtonStateRaw = false;
+bool playButtonStateRaw = false;
+bool nextButtonStateRaw = false;
 
+bool prevButtonState = false;
+bool playButtonState = false;
+bool nextButtonState = false;
+
+bool prevButtonLastState = false;
+bool playButtonLastState = false;
+bool nextButtonLastState = false;
+
+unsigned long lastDebounceTimePrev = 0;
+unsigned long lastDebounceTimePlay = 0;
+unsigned long lastDebounceTimeNext = 0;
 
 // Declaración de funciones
 void playMP3(const char *filename);
 void listFiles();
 void playNext();
 void playPrevious();
-void displaySongInfo(const char *filename,bool isPlaying);
+void displaySongInfo(const char *filename);
+void readButtons();
+void displayCurrentSelection();
 
 void setup() {
   Serial.begin(115200);
+  SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI, SD_CS);
+
   // Inicializar la tarjeta SD
   if (!SD.begin(SD_CS)) {
     Serial.println("Error al inicializar la tarjeta SD.");
     return;
   }
+  Serial.println("Tarjeta SD inicializada correctamente.");
 
   // Inicializar la comunicación I2C
   Wire.begin(I2C_SDA, I2C_SCL);
+  Serial.println("Comunicación I2C inicializada correctamente.");
 
   // Inicializar la pantalla OLED
   if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println(F("Error en la inicialización de la pantalla OLED."));
     for (;;);
   }
+  Serial.println("Pantalla OLED inicializada correctamente.");
 
   // Configurar pines para audio
   audioOutput = new AudioOutputI2S();
-  audioOutput-> SetGain(0.125);
-   //Configurar pines I2S
-  i2s_pin_config_t i2sPins = {
-    .mck_io_num = I2S_PIN_NO_CHANGE,
-    .bck_io_num = I2S_BCLK,
-    .ws_io_num = I2S_LRC,
-    .data_out_num = I2S_DOUT,
-    .data_in_num = I2S_PIN_NO_CHANGE
-  };
+  audioOutput->SetPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
+  audioOutput->SetGain(0.125);
+  Serial.println("Pines de audio configurados correctamente.");
 
-  i2s_config_t i2sConfig = {
-    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-    .sample_rate = 44100,
-    .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-    .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
-    .communication_format = I2S_COMM_FORMAT_I2S,
-    .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-    .dma_buf_count = 8,
-    .dma_buf_len = 64,
-    .use_apll = false,
-    .tx_desc_auto_clear = true,
-    .fixed_mclk = 0
-  };
-
-  i2s_driver_install(I2S_NUM_0, &i2sConfig, 0, NULL);
-  i2s_set_pin(I2S_NUM_0, &i2sPins);
-
-  // Configurar los pines de los botones como entrada con resistencia pull-up
-  pinMode(PLAY_BUTTON, INPUT_PULLUP);
-  pinMode(NEXT_BUTTON, INPUT_PULLUP);
-  pinMode(PREV_BUTTON, INPUT_PULLUP);
+  // Configurar pines de botones
+  pinMode(BUTTON_PLAY, INPUT_PULLUP);
+  pinMode(BUTTON_PREV, INPUT_PULLUP);
+  pinMode(BUTTON_NEXT, INPUT_PULLUP);
+  Serial.println("Pines de botones configurados correctamente.");
 
   // Listar los archivos disponibles en la carpeta "playlist"
   listFiles();
+  Serial.println("Archivos en la playlist listados correctamente.");
+
+  // Mostrar la primera canción en la lista
+  displayCurrentSelection();
+  Serial.println("Canción inicial mostrada correctamente.");
 }
 
 void loop() {
-  static bool playButtonState = HIGH; // Estado anterior del botón de reproducción
-  static bool nextButtonState = HIGH; // Estado anterior del botón de siguiente
-  static bool prevButtonState = HIGH; // Estado anterior del botón de anterior
-
-  // Verificar el estado del botón de reproducción
-  bool playButtonPressed = (digitalRead(PLAY_BUTTON) == LOW && playButtonState == HIGH);
-  playButtonState = digitalRead(PLAY_BUTTON);
-
-  // Verificar si se presiona el botón de reproducción
-  if (playButtonPressed) {
-    delay(200); // Debouncing
-    if (!isPlaying && fileCount > 0) {
-      currentIndex = (currentIndex + 1) % fileCount;
-      playMP3(playlist[currentIndex].c_str());
-    }
-  }
-
-  // Verificar si se presiona el botón de siguiente
-  if (digitalRead(NEXT_BUTTON) == LOW) {
-    delay(200); // Debouncing
-    if (fileCount > 0 && !isPlaying) {
-      playNext();
-    }
-  }
-
-  // Verificar si se presiona el botón de anterior
-  if (digitalRead(PREV_BUTTON) == LOW) {
-    delay(200); // Debouncing
-    if (fileCount > 0 && !isPlaying) {
-      playPrevious();
-    }
-  }
+  // Leer el estado de los botones
+  readButtons();
 
   // Verificar si la reproducción está en curso
   if (mp3 && mp3->isRunning()) {
     if (!mp3->loop()) {
-      mp3->stop();
-      isPlaying = false;
-      delete mp3;
-      delete audioFile;
+      // La canción actual ha terminado, reproducir la siguiente automáticamente
+      playNext();
+      Serial.println("Canción siguiente reproducida automáticamente.");
     }
   }
 }
 
 
 void playMP3(const char *filename) {
+  if (isPlaying && mp3) {
+    mp3->stop();
+    isPlaying = false;
+    Serial.println("Reproducción detenida.");
+  }
+
+  Serial.print("Reproduciendo archivo MP3: ");
+  Serial.println(filename);
+
   audioFile = new AudioFileSourceSD(filename);
   mp3 = new AudioGeneratorMP3();
-  mp3->begin(audioFile, audioOutput);
-  isPlaying = true;
-
-  displaySongInfo(filename,true);
+  if (mp3->begin(audioFile, audioOutput)) {
+    isPlaying = true;
+    displaySongInfo(filename);
+    Serial.println("Reproducción iniciada correctamente.");
+  } else {
+    Serial.println("Error al iniciar la reproducción del archivo MP3.");
+    delete mp3;
+    delete audioFile;
+    mp3 = nullptr;
+    audioFile = nullptr;
+  }
 }
 
-void displaySongInfo(const char *filename, bool isPlaying = false) {
+void displaySongInfo(const char *filename) {
+  Serial.print("Mostrando información para: ");
+  Serial.println(filename);
+
   String fileStr = String(filename);
+  fileStr.replace("/playlist/", ""); // Eliminar la ruta
   fileStr.replace(".mp3", ""); // Eliminar la extensión .mp3
 
   int separatorIndex = fileStr.indexOf('_');
@@ -179,29 +173,20 @@ void displaySongInfo(const char *filename, bool isPlaying = false) {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
-  
-  if (isPlaying) {
-    // Mostrar solo la canción que se está reproduciendo junto con el nombre del artista
-    display.setTextSize(2);
-    display.setCursor(0, 10);
-    display.println(songName);
-    display.setTextSize(1);
-    display.setCursor(0, 30);
-    display.println(artistName);
-  } else {
-    // Mostrar todos los nombres de las canciones en la lista
-    display.setCursor(0, 0);
-    display.println("Canciones:");
-    display.setTextSize(1);
-    display.setCursor(0, 10);
-    display.println(songName);
-  }
-  
+
+  display.setTextSize(2);
+  display.setCursor(0, 10);
+  display.println(songName);
+  display.setTextSize(1);
+  display.setCursor(0, 30);
+  display.println(artistName);
+
   display.display();
+  Serial.println("Display updated.");
 }
 
 void listFiles() {
-  dir = SD.open("/playlist");
+  File dir = SD.open("/playlist");
   if (!dir) {
     Serial.println("Error al abrir la carpeta de la playlist.");
     return;
@@ -210,12 +195,15 @@ void listFiles() {
   Serial.println("Archivos disponibles en la playlist:");
   fileCount = 0;
   while (true) {
-    entry = dir.openNextFile();
+    File entry = dir.openNextFile();
     if (!entry) break;
-    playlist[fileCount++] = entry.name();
-    Serial.println(entry.name());
-    entry.close();
-    if (fileCount >= 20) break; // Limitar a 20 archivos para evitar desbordamiento
+    playlist[fileCount] = String("/playlist/") + entry.name();
+    Serial.println(playlist[fileCount]);
+    fileCount++;
+    if (fileCount >= Nfiles) {
+      Serial.println("Se excedió el límite de archivos en la playlist.");
+      break; // Limitar a Nfiles archivos para evitar desbordamiento
+    }
   }
   dir.close();
 }
@@ -223,13 +211,149 @@ void listFiles() {
 void playNext() {
   if (fileCount > 0) {
     currentIndex = (currentIndex + 1) % fileCount;
-    playMP3(playlist[currentIndex].c_str());
+
+    // Verificar si currentIndex sigue siendo válido
+    if (currentIndex < fileCount) {
+      playMP3(playlist[currentIndex].c_str());
+      Serial.print("Playing next file: ");
+      Serial.println(playlist[currentIndex]);
+    }
+    else {
+      // currentIndex está fuera de los límites de la lista, volver al primer archivo
+      currentIndex = 0;
+      Serial.println("Volviendo al inicio de la lista.");
+      playMP3(playlist[currentIndex].c_str());
+      Serial.print("Playing next file: ");
+      Serial.println(playlist[currentIndex]);
+    }
   }
+  else {
+    Serial.println("No hay archivos en la lista.");
+    // Aquí podrías mostrar un mensaje en la pantalla OLED
+    }
+
 }
+
 
 void playPrevious() {
   if (fileCount > 0) {
+    // Guardar el índice actual para comprobación
+    int previousIndex = currentIndex;
+
+    // Calcula el índice del archivo anterior
     currentIndex = (currentIndex - 1 + fileCount) % fileCount;
-    playMP3(playlist[currentIndex].c_str());
+
+    // Verifica si se intentó retroceder desde el primer archivo
+    if (currentIndex == previousIndex) {
+      // Mensaje de advertencia en el monitor serial
+      Serial.println("No se puede retroceder más en la lista.");
+
+      // Reiniciar la reproducción del primer archivo
+      playMP3(playlist[currentIndex].c_str());
+      Serial.print("Playing first file again: ");
+      Serial.println(playlist[currentIndex]);
+    } else {
+      // Reproducir el archivo anterior normalmente
+      playMP3(playlist[currentIndex].c_str());
+      Serial.print("Playing previous file: ");
+      Serial.println(playlist[currentIndex]);
+    }
+  } else {
+    Serial.println("No files in playlist.");
+    // Aquí podrías mostrar un mensaje en la pantalla OLED
+  }
+}
+
+
+void readButtons() {
+  // Leer estado actual de los botones
+  prevButtonStateRaw = digitalRead(BUTTON_PREV);
+  playButtonStateRaw = digitalRead(BUTTON_PLAY);
+  nextButtonStateRaw = digitalRead(BUTTON_NEXT);
+
+  // Obtener el tiempo actual
+  unsigned long currentTime = millis();
+
+  // Botón PREV
+  if (prevButtonStateRaw != prevButtonLastState) {
+    lastDebounceTimePrev = currentTime;
+  }
+  if ((currentTime - lastDebounceTimePrev) > DEBOUNCE_DELAY) {
+    if (prevButtonStateRaw != prevButtonState) {
+      prevButtonState = prevButtonStateRaw;
+      if (prevButtonState == LOW) {
+        // Acción al detectar flanco descendente
+        currentIndex = (currentIndex - 1 + fileCount) % fileCount;
+        if (isPlaying) {
+          playMP3(playlist[currentIndex].c_str());
+        } else {
+          displayCurrentSelection();
+        }
+        Serial.println("Canción anterior seleccionada correctamente.");
+      }
+    }
+  }
+  prevButtonLastState = prevButtonStateRaw;
+
+  // Botón PLAY
+  if (playButtonStateRaw != playButtonLastState) {
+    lastDebounceTimePlay = currentTime;
+  }
+  if ((currentTime - lastDebounceTimePlay) > DEBOUNCE_DELAY) {
+    if (playButtonStateRaw != playButtonState) {
+      playButtonState = playButtonStateRaw;
+      if (playButtonState == LOW) {
+        // Acción al detectar flanco descendente
+        if (!isPlaying) {
+          playMP3(playlist[currentIndex].c_str());
+          Serial.println("Canción reproducida correctamente.");
+        } else {
+          playMP3(""); // Detener la reproducción
+          displayCurrentSelection(); // Actualizar la pantalla
+          Serial.println("Reproducción detenida.");
+      }
+    }
+  }
+  playButtonLastState = playButtonStateRaw;
+
+  // Botón NEXT
+  if (nextButtonStateRaw != nextButtonLastState) {
+    lastDebounceTimeNext = currentTime;
+  }
+  if ((currentTime - lastDebounceTimeNext) > DEBOUNCE_DELAY) {
+    if (nextButtonStateRaw != nextButtonState) {
+      nextButtonState = nextButtonStateRaw;
+      if (nextButtonState == LOW) {
+        // Acción al detectar flanco descendente
+        currentIndex = (currentIndex + 1) % fileCount;
+        if (isPlaying) {
+          playMP3(playlist[currentIndex].c_str());
+        } else {
+          displayCurrentSelection();
+        }
+        Serial.println("Canción siguiente seleccionada correctamente.");
+      }
+    }
+  }
+  nextButtonLastState = nextButtonStateRaw;
+}
+
+
+
+void displayCurrentSelection(){
+  if (fileCount > 0) {
+    String fileStr = playlist[currentIndex];
+    fileStr.replace("/playlist/", ""); // Eliminar la ruta
+    fileStr.replace(".mp3", ""); // Eliminar la extensión .mp3
+
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+
+    display.setTextSize(2);
+    display.setCursor(0, 10);
+    display.println(fileStr);
+
+    display.display();
   }
 }
